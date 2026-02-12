@@ -20,6 +20,47 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Tag St-Jérôme snapshot when store_slug is missing
+        run: |
+          SNAPSHOT_FILE="snapshots/2026-02-11/walmart_all.json"
+          if [ ! -f "$SNAPSHOT_FILE" ]; then
+            echo "Snapshot not found: $SNAPSHOT_FILE"
+            exit 0
+          fi
+
+          if python - "$SNAPSHOT_FILE" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+with path.open("r", encoding="utf-8") as fh:
+    data = json.load(fh)
+
+if isinstance(data, list):
+    items = [item for item in data if isinstance(item, dict)]
+elif isinstance(data, dict) and isinstance(data.get("items"), list):
+    items = [item for item in data["items"] if isinstance(item, dict)]
+else:
+    items = []
+
+has_store_slug = any(isinstance(item.get("store_slug"), str) and item["store_slug"].strip() for item in items)
+sys.exit(0 if has_store_slug else 1)
+PY
+          then
+            echo "store_slug already present; skipping tagging."
+          else
+            python scripts/tag_snapshot_store.py \
+              --file "$SNAPSHOT_FILE" \
+              --store-slug st-jerome-qc \
+              --store-name "Walmart St-Jérôme" \
+              --city "Saint-Jérôme" \
+              --province QC
+          fi
+
+      - name: Split walmart_all by store
+        run: python scripts/split_by_store.py --input snapshots/2026-02-11/walmart_all.json
+
       - name: Build indexes
         run: python scripts/build_indexes.py --days 30 --drop 15
 
@@ -28,11 +69,11 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          if git diff --quiet -- indexes; then
-            echo "No index changes to commit."
+          if git diff --quiet -- snapshots indexes; then
+            echo "No snapshot/index changes to commit."
             exit 0
           fi
 
-          git add indexes
+          git add snapshots indexes
           git commit -m "chore(indexes): refresh Walmart history and daily deals"
           git push

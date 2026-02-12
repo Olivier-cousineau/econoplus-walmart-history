@@ -3,7 +3,7 @@ name: Build Walmart Indexes
 on:
   workflow_dispatch:
   schedule:
-    - cron: "17 5 * * 2,3,4"
+    - cron: "0 14 * * 2,3,4"
 
 permissions:
   contents: write

@@ -1,0 +1,38 @@
+name: Build Walmart Indexes
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 5 * * 2,3,4"
+
+permissions:
+  contents: write
+
+jobs:
+  build-indexes:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build indexes
+        run: python scripts/build_indexes.py --days 30 --drop 15
+
+      - name: Commit and push index changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git diff --quiet -- indexes; then
+            echo "No index changes to commit."
+            exit 0
+          fi
+
+          git add indexes
+          git commit -m "chore(indexes): refresh Walmart history and daily deals"
+          git push

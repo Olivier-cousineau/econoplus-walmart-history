@@ -20,6 +20,12 @@ def parse_date(folder_name: str) -> datetime:
     return datetime.strptime(folder_name, "%Y-%m-%d")
 
 
+def slugify(value: str) -> str:
+    value = value.strip().lower()
+    value = re.sub(r"[^a-z0-9]+", "-", value)
+    return value.strip("-") or "unknown-store"
+
+
 def load_items(path: Path) -> list[dict[str, Any]]:
     with path.open("r", encoding="utf-8") as fh:
         data = json.load(fh)
@@ -50,7 +56,9 @@ def to_float(value: Any) -> float | None:
 def extract_url_id(url: str | None) -> str | None:
     if not url:
         return None
+
     patterns = [
+        r"/ip/.+/(\d{6,})",
         r"/(\d{8,})",
         r"/([A-Z0-9]{8,})",
     ]
@@ -79,14 +87,17 @@ def make_item_key(item: dict[str, Any]) -> str:
 def normalize_store_slug(item: dict[str, Any], fallback: str) -> str:
     store_slug = item.get("store_slug") or item.get("store")
     if store_slug:
-        return str(store_slug).strip().lower().replace(" ", "-")
+        return slugify(str(store_slug))
     return fallback
 
 
 def iter_snapshot_dates() -> list[Path]:
-    date_dirs = [p for p in SNAPSHOTS_DIR.iterdir() if p.is_dir()]
+    if not SNAPSHOTS_DIR.exists():
+        return []
     valid = []
-    for path in date_dirs:
+    for path in SNAPSHOTS_DIR.iterdir():
+        if not path.is_dir():
+            continue
         try:
             parse_date(path.name)
             valid.append(path)
@@ -101,7 +112,8 @@ def build_history(days: int) -> tuple[dict[str, dict[str, Any]], str]:
         return {}, ""
 
     selected = dates[-days:]
-    today = selected[-1].name
+    selected_dates = [d.name for d in selected]
+    today = selected_dates[-1]
 
     stores: dict[str, dict[str, Any]] = defaultdict(lambda: {"items": {}})
 
@@ -119,30 +131,27 @@ def build_history(days: int) -> tuple[dict[str, dict[str, Any]], str]:
                 bucket = stores[store_slug]["items"]
                 item_key = make_item_key(item)
 
-                existing = bucket.get(item_key)
-                if not existing:
-                    existing = {
+                if item_key not in bucket:
+                    bucket[item_key] = {
                         "title": item.get("title"),
                         "url": item.get("url"),
                         "image": item.get("image"),
                         "sku": item.get("sku"),
-                        "history": [],
+                        "history": {},
                         "max_30d": None,
                         "min_30d": None,
                         "last_seen": date_str,
                     }
-                    bucket[item_key] = existing
 
+                existing = bucket[item_key]
                 price = to_float(item.get("price_current"))
                 in_stock = bool(item.get("in_stock", False))
-                existing["history"].append(
-                    {
-                        "date": date_str,
-                        "price": price,
-                        "present": True,
-                        "in_stock": in_stock,
-                    }
-                )
+                existing["history"][date_str] = {
+                    "date": date_str,
+                    "price": price,
+                    "present": True,
+                    "in_stock": in_stock,
+                }
                 existing["last_seen"] = date_str
                 existing["title"] = item.get("title") or existing.get("title")
                 existing["url"] = item.get("url") or existing.get("url")
@@ -155,11 +164,21 @@ def build_history(days: int) -> tuple[dict[str, dict[str, Any]], str]:
     for store_slug, store_data in stores.items():
         items_out: dict[str, Any] = {}
         for item_key, entry in store_data["items"].items():
-            prices = [h["price"] for h in entry["history"] if h["price"] is not None]
-            max_30d = max(prices) if prices else None
-            min_30d = min(prices) if prices else None
-            entry["max_30d"] = max_30d
-            entry["min_30d"] = min_30d
+            for date_str in selected_dates:
+                if date_str not in entry["history"]:
+                    entry["history"][date_str] = {
+                        "date": date_str,
+                        "price": None,
+                        "in_stock": False,
+                        "present": False,
+                    }
+
+            ordered_history = [entry["history"][date_str] for date_str in selected_dates]
+            prices = [h["price"] for h in ordered_history if h["present"] and h["price"] is not None]
+
+            entry["history"] = ordered_history
+            entry["max_30d"] = max(prices) if prices else None
+            entry["min_30d"] = min(prices) if prices else None
             items_out[item_key] = entry
 
         history_output[store_slug] = {
@@ -209,7 +228,7 @@ def build_deals(today: str, history_output: dict[str, dict[str, Any]], drop_thre
             max_30d = history_entry.get("max_30d")
             in_stock = bool(item.get("in_stock", False))
 
-            if not in_stock or price_today is None or not max_30d or max_30d <= 0:
+            if not in_stock or price_today is None or max_30d is None or max_30d <= 0:
                 continue
 
             drop_pct = ((max_30d - price_today) / max_30d) * 100.0
@@ -258,8 +277,8 @@ def main() -> None:
     if not history_output:
         print("No valid snapshots found in snapshots/YYYY-MM-DD; nothing to index.")
         return
-    write_history_indexes(history_output)
 
+    write_history_indexes(history_output)
     deals_by_store = build_deals(today=today, history_output=history_output, drop_threshold=args.drop)
     write_deals(today=today, deals_by_store=deals_by_store)
 

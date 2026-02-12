@@ -4,6 +4,13 @@ on:
   workflow_dispatch:
   schedule:
     - cron: "0 14 * * 2,3,4"
+  push:
+    branches: [main]
+    paths:
+      - "snapshots/**"
+      - "scripts/**"
+      - "indexes/**"
+      - ".github/workflows/build-indexes.yml"
 
 permissions:
   contents: write
@@ -21,15 +28,17 @@ jobs:
           python-version: "3.11"
 
       - name: Pick latest snapshot
+        shell: bash
         run: |
-          latest_dir=$(find snapshots -mindepth 1 -maxdepth 1 -type d -name "????-??-??" | sort | tail -n 1)
+          # On prend le dernier dossier snapshots/YYYY-MM-DD
+          latest_date=$(ls -1 snapshots | grep -E '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' | sort | tail -n 1)
 
-          if [ -z "$latest_dir" ]; then
+          if [ -z "$latest_date" ]; then
             echo "No snapshot directory found under snapshots/."
             exit 0
           fi
 
-          SNAPSHOT_FILE="$latest_dir/walmart_all.json"
+          SNAPSHOT_FILE="snapshots/${latest_date}/walmart_all.json"
           if [ ! -f "$SNAPSHOT_FILE" ]; then
             echo "Snapshot file not found: $SNAPSHOT_FILE"
             exit 0
@@ -37,8 +46,10 @@ jobs:
 
           echo "Using snapshot file: $SNAPSHOT_FILE"
           echo "SNAPSHOT_FILE=$SNAPSHOT_FILE" >> "$GITHUB_ENV"
+          echo "SNAPSHOT_DATE=$latest_date" >> "$GITHUB_ENV"
 
       - name: Tag St-Jérôme snapshot when store_slug is missing
+        shell: bash
         run: |
           if [ ! -f "$SNAPSHOT_FILE" ]; then
             echo "Snapshot not found: $SNAPSHOT_FILE"
@@ -46,22 +57,20 @@ jobs:
           fi
 
           if python - "$SNAPSHOT_FILE" <<'PY'
-import json
-import sys
+import json, sys
 from pathlib import Path
 
 path = Path(sys.argv[1])
-with path.open("r", encoding="utf-8") as fh:
-    data = json.load(fh)
+data = json.loads(path.read_text(encoding="utf-8"))
 
 if isinstance(data, list):
-    items = [item for item in data if isinstance(item, dict)]
+    items = [x for x in data if isinstance(x, dict)]
 elif isinstance(data, dict) and isinstance(data.get("items"), list):
-    items = [item for item in data["items"] if isinstance(item, dict)]
+    items = [x for x in data["items"] if isinstance(x, dict)]
 else:
     items = []
 
-has_store_slug = any(isinstance(item.get("store_slug"), str) and item["store_slug"].strip() for item in items)
+has_store_slug = any(isinstance(it.get("store_slug"), str) and it["store_slug"].strip() for it in items)
 sys.exit(0 if has_store_slug else 1)
 PY
           then
@@ -82,6 +91,7 @@ PY
         run: python scripts/build_indexes.py --days 30 --drop 15
 
       - name: Commit and push index changes
+        shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

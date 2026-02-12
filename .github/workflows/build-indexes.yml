@@ -20,9 +20,26 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Pick latest snapshot
+        run: |
+          latest_dir=$(find snapshots -mindepth 1 -maxdepth 1 -type d -name "????-??-??" | sort | tail -n 1)
+
+          if [ -z "$latest_dir" ]; then
+            echo "No snapshot directory found under snapshots/."
+            exit 0
+          fi
+
+          SNAPSHOT_FILE="$latest_dir/walmart_all.json"
+          if [ ! -f "$SNAPSHOT_FILE" ]; then
+            echo "Snapshot file not found: $SNAPSHOT_FILE"
+            exit 0
+          fi
+
+          echo "Using snapshot file: $SNAPSHOT_FILE"
+          echo "SNAPSHOT_FILE=$SNAPSHOT_FILE" >> "$GITHUB_ENV"
+
       - name: Tag St-Jérôme snapshot when store_slug is missing
         run: |
-          SNAPSHOT_FILE="snapshots/2026-02-11/walmart_all.json"
           if [ ! -f "$SNAPSHOT_FILE" ]; then
             echo "Snapshot not found: $SNAPSHOT_FILE"
             exit 0
@@ -59,7 +76,7 @@ PY
           fi
 
       - name: Split walmart_all by store
-        run: python scripts/split_by_store.py --input snapshots/2026-02-11/walmart_all.json
+        run: python scripts/split_by_store.py --input "$SNAPSHOT_FILE"
 
       - name: Build indexes
         run: python scripts/build_indexes.py --days 30 --drop 15
@@ -76,4 +93,4 @@ PY
 
           git add snapshots indexes
           git commit -m "chore(indexes): refresh Walmart history and daily deals"
-          git push
+          git push origin HEAD:main
